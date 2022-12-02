@@ -93,35 +93,43 @@ impl<T: Send + Sync> Trie<T> {
         // ------------------------------------------------
         // Removing
 
-        // The key_iter is certain not get exhausted before reaching the top of the `Trie`
-        let mut key_iter = key.chars().rev();
+        if !current_node.is_end() {
+            return Err("No corresponding value");
+        }
 
         if !current_node.child_nodes.is_empty() {
             current_node.set_value(None);
             return Ok(());
         }
-        let mut parent_node_ptr = current_node.parent_node_ptr;
 
-        while !parent_node_ptr.is_null() {
-            let key = key_iter.next().unwrap();
+        // The key_iter is certain not get exhausted before reaching the top of the `Trie`
+        let mut key_iter = key.chars().rev();
+        let key = key_iter.next().unwrap();
 
-            // SAFETY: Only one mutator
+        // Last parent of the node with only only one child not containing any value (or matching node)
+        let mut parent_node_ptr_and_key = (current_node.parent_node_ptr, key);
+
+        for key in key_iter {
+            // SAFETY: No mutation of contents of pointer
             unsafe {
-                let parent_node = &mut *(parent_node_ptr);
-                let _ = parent_node.child_nodes.remove(&key); // Drop
+                let parent_node = &*(parent_node_ptr_and_key.0);
 
-                if !parent_node.child_nodes.is_empty() || parent_node.is_end() {
-                    return Ok(());
+                if parent_node.child_nodes.len() > 1 || parent_node.is_end() {
+                    break;
                 }
 
-                parent_node_ptr = parent_node.parent_node_ptr;
+                parent_node_ptr_and_key = (parent_node.parent_node_ptr, key);
             }
         }
 
-        let key = key_iter.next().unwrap();
-
-        if !top_level_nodes.get_mut(&key).unwrap().is_end() {
-            top_level_nodes.remove(&key);
+        // SAFETY:
+        unsafe {
+            if parent_node_ptr_and_key.0.is_null() {
+                top_level_nodes.remove(&parent_node_ptr_and_key.1);
+            } else {
+                let parent_node = &mut *parent_node_ptr_and_key.0;
+                parent_node.child_nodes.remove(&parent_node_ptr_and_key.1);
+            }
         }
 
         Ok(())
@@ -196,11 +204,7 @@ impl<T> TrieNode<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::{RefCell, RefMut},
-        ops::Deref,
-        sync::Arc,
-    };
+    use std::{ops::Deref, sync::Arc};
 
     use super::*;
 
