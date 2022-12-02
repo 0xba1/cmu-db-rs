@@ -67,6 +67,7 @@ impl<T: Send + Sync> Trie<T> {
 
     pub fn remove(&self, key: &str) -> Result<(), &'static str> {
         let top_level_nodes = &mut *(self.top_level_nodes.write());
+
         // ------------------------------------------------
         // Get node
         if key.is_empty() {
@@ -82,12 +83,23 @@ impl<T: Send + Sync> Trie<T> {
             return Err("No corresponding value");
         };
 
+        // Last parent of the node with only only one child not containing any value (or matching node)
+        let mut parent_node_ptr_and_key = Some((current_node.parent_node_ptr, first_key));
+
         for key in key_iter {
             current_node = if let Some(node) = current_node.get_node_mut(&key) {
                 node
             } else {
                 return Err("No corresponding value");
             };
+
+            if (current_node.is_end() && !current_node.child_nodes.is_empty())
+                || current_node.child_nodes.len() > 1
+            {
+                parent_node_ptr_and_key = None;
+            } else if parent_node_ptr_and_key.is_none() {
+                parent_node_ptr_and_key = Some((current_node.parent_node_ptr, key));
+            }
         }
 
         // ------------------------------------------------
@@ -102,33 +114,18 @@ impl<T: Send + Sync> Trie<T> {
             return Ok(());
         }
 
-        // The key_iter is certain not get exhausted before reaching the top of the `Trie`
-        let mut key_iter = key.chars().rev();
-        let key = key_iter.next().unwrap();
-
-        // Last parent of the node with only only one child not containing any value (or matching node)
-        let mut parent_node_ptr_and_key = (current_node.parent_node_ptr, key);
-
-        for key in key_iter {
-            // SAFETY: No mutation of contents of pointer
-            unsafe {
-                let parent_node = &*(parent_node_ptr_and_key.0);
-
-                if parent_node.child_nodes.len() > 1 || parent_node.is_end() {
-                    break;
-                }
-
-                parent_node_ptr_and_key = (parent_node.parent_node_ptr, key);
-            }
+        if parent_node_ptr_and_key.is_none() {
+            return Ok(());
         }
 
         // SAFETY:
         unsafe {
+            let parent_node_ptr_and_key = parent_node_ptr_and_key.unwrap();
             if parent_node_ptr_and_key.0.is_null() {
-                top_level_nodes.remove(&parent_node_ptr_and_key.1);
+                let _ = top_level_nodes.remove(&parent_node_ptr_and_key.1);
             } else {
                 let parent_node = &mut *parent_node_ptr_and_key.0;
-                parent_node.child_nodes.remove(&parent_node_ptr_and_key.1);
+                let _ = parent_node.child_nodes.remove(&parent_node_ptr_and_key.1);
             }
         }
 
@@ -229,6 +226,35 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn insert_multiple_values() {
+        // Create new `Trie`
+        let mut trie = Trie::new();
+
+        // Insert values
+        assert!(trie.insert("hello", 1).is_ok());
+        assert!(trie.insert("hell", 2).is_ok());
+        assert!(trie.insert("hel", 3).is_ok());
+        assert!(trie.insert("hey", 4).is_ok());
+        assert!(trie.insert("back", 4).is_ok());
+
+        println!("{:?}", &trie);
+
+        // Delete value
+        assert!(trie.remove("hello").is_ok());
+        assert!(trie.remove("hello").is_err());
+        assert!(trie.remove("hell").is_ok());
+        assert!(trie.remove("hel").is_ok());
+        println!("{:?}", &trie);
+        assert!(trie.remove("hey").is_ok());
+        println!("{:?}", &trie);
+        assert!(trie.remove("back").is_ok());
+        println!("{:?}", &trie);
+
+        // Get value
+        assert_eq!(*trie.get("hello"), None);
     }
 
     #[test]
